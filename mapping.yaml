@@ -13,7 +13,7 @@ defaults:
   loopback_if_same_host: true
 
 links:
-  - [100, 1, 102, 1]
+  - [100, 1, 102, 1] # Note: 1 equals eth1, not eth0. I already have an interface connected using a bridge for management.
   - [101, 1, 102, 2]
   - [100, 2, 103, 1]
   - [101, 2, 103, 2]
