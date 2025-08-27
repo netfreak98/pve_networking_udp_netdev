@@ -18,6 +18,7 @@ Examples include:
 - **Link aggregation** – LACP  
 
 By using UDP sockets as direct pipes between VM interfaces, you can emulate dedicated physical cabling inside Proxmox and accurately test these protocols.
+Unlike memory- or file-system- sockets it even allows to connect VMs running on different KVM hypervisors like this.
 
 
 ## Overview
@@ -31,7 +32,7 @@ This tool automates the creation of point-to-point network connections between P
 - **Multi-host support** with configurable IP mappings
 - **Automatic port allocation** using formula: `<prefix><VMID><ethIndex>`
 - **Respects existing network configurations** by reading current VM settings
-- **PCI address management** to avoid conflicts
+- **PCI address management** to avoid conflicts and to make sure generated socket-nics are added `after` normal bridge interfaces
 
 ## Configuration (mapping.yaml)
 
@@ -117,11 +118,6 @@ defaults:
 All `udp=` and `localaddr=` fields use these IPs. If both endpoints resolve to the *same* non-loopback IP and `loopback_if_same_host: true` (default), the script substitutes `127.0.0.1` on both sides to keep packets local.
 
 MTU Note: When using non-loopback addresses, ensure the physical network MTU >= the `host_mtu` setting to avoid fragmentation.
-
-## Limitations
-- Only first digit of `udp_port_base` used for port calculation
-- No automatic cleanup of removed links
-- VMIDs limited to 999, eth indices to 9 for current port scheme
 
 ## Usage
 ```bash
