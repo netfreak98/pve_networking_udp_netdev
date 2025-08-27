@@ -81,7 +81,6 @@ The first byte has the locally administered bit (0x02) set to avoid OUI conflict
 - VMIDs must be ≤ 999 (3 digits)
 - Ethernet indices must be ≤ 9 (single digit)
 - Generated ports must be ≤ 65535
-```
 
 ## Sample Output Snippet
 ```
@@ -108,7 +107,7 @@ MTU Note: When using non-loopback addresses, ensure the physical network MTU >= 
 
 ## Usage
 ```bash
-pip install pyyaml (Normaly present with PVE installations)
+pip install pyyaml
 python3 gen_pve_links_args.py mapping.yaml > adjust_vm_config.sh
 bash adjust_vm_config.sh
 qm start <vmid>
