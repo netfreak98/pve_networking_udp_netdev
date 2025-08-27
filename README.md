@@ -103,7 +103,7 @@ The first byte has the locally administered bit (0x02) set to avoid OUI conflict
 
 ## Sample Output Snippet
 ```
-qm set 100 --args "-netdev socket,id=c_100_1_102_1_A,udp=127.0.0.1:40103,localaddr=127.0.0.1:40101 -device virtio-net-pci,mac=be:24:99:00:64:01,rx_queue_size=1024,tx_queue_size=256,netdev=c_100_1_102_1_A,id=net1,host_mtu=65535"
+qm set 100 --args "-netdev socket,id=net1,udp=127.0.0.1:41021,localaddr=127.0.0.1:41001 -device virtio-net-pci,mac=be:24:99:00:64:01,rx_queue_size=1024,tx_queue_size=256,netdev=net1,id=net1,bus=pci.0,addr=0x15,host_mtu=65535 -netdev socket,id=net2,udp=127.0.0.1:41031,localaddr=127.0.0.1:41002 -device virtio-net-pci,mac=be:24:99:00:64:02,rx_queue_size=1024,tx_queue_size=256,netdev=net2,id=net2,bus=pci.0,addr=0x16,host_mtu=65535"
 ```
 
 ## Multi-Host Usage
