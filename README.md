@@ -1,95 +1,92 @@
-# Proxmox QEMU UDP Link Generator
+# PVE UDP Network Link Generator
 
-Simplified Python helper to add point‑to‑point ("cable") links between Proxmox VMs using QEMU user‑space UDP sockets. It inspects existing VM config files to continue `netN` numbering, generates deterministic MACs, and emits `qm set` command lines you can paste / execute.
+Generates Proxmox VE (PVE) QEMU arguments for creating direct UDP-based network links between VMs.
+
+## Overview
+
+This tool automates the creation of point-to-point network connections between Proxmox VMs using UDP sockets. It generates the necessary QEMU command-line arguments to establish these links without requiring traditional bridges or VLANs.
 
 ## Features
-- UDP only (no vhost-user, no memory backends)
-- Deterministic MAC addresses from a 3‑byte prefix + VMID + interface index
-- Deterministic UDP port formula: `port = udp_port_base + <VMID> + <netIndex>`
-- Automatically discovers highest existing `netN` in `/etc/pve/qemu-server/<vmid>.conf` and appends new NICs sequentially
-- Single YAML mapping drives all links
 
-## Port Formula
-Requested scheme: concatenate prefixDigit (first digit of `udp_port_base`), the VMID, and the eth index you specify in the link list.
+- **Direct VM-to-VM networking** using UDP sockets
+- **Deterministic MAC address generation** based on VMID and interface index
+- **Multi-host support** with configurable IP mappings
+- **Automatic port allocation** using formula: `<prefix><VMID><ethIndex>`
+- **Respects existing network configurations** by reading current VM settings
+- **PCI address management** to avoid conflicts
 
+## Configuration (mapping.yaml)
+
+### Defaults Section
+
+- `model`: NIC model (default: `virtio-net-pci`)
+- `host_mtu`: Maximum transmission unit (0 to omit, default: 65535)
+- `rx_queue_size`: Receive queue size (default: 1024)
+- `tx_queue_size`: Transmit queue size (default: 256)
+- `mac_prefix`: 3-byte MAC address prefix (default: `bc:24:99`)
+- `udp_port_base`: Base port for UDP connections (default: 40000)
+- `udp_ip_by_vm`: Optional VMID to host IP mapping for multi-host setups
+- `udp_default_ip`: Fallback IP when VMID not in mapping (default: 127.0.0.1)
+- `loopback_if_same_host`: Use loopback for same-host connections (default: true)
+
+### Links Section
+
+Define connections as: `[vmA, ethA, vmB, ethB]`
+
+Example:
+```yaml
+links:
+  - [100, 1, 102, 1]  # Connect VM100 eth1 to VM102 eth1
+  - [101, 1, 102, 2]  # Connect VM101 eth1 to VM102 eth2
 ```
-port = int(f"{prefixDigit}{VMID}{ethIndex}")
+
+## Usage
+
+```bash
+./gen_pve_links_args.py mapping.yaml
 ```
-Example: `udp_port_base: 40000` -> `prefixDigit = '4'`.
-VM 101, eth 2 -> `"4" + "101" + "2" = "41012"` => port 41012.
 
-Notes:
-- `ethIndex` is the number you put in the link (second or fourth element), not the resulting `netN` index.
-- Collisions are detected; script exits if two endpoints would share the same port.
-- Ports must be <= 65535. Large VMIDs or indices can overflow; choose a different `udp_port_base` with a smaller leading digit if needed (e.g. 30000 -> prefixDigit '3').
+This generates `qm set` commands that can be executed to apply the network configuration:
 
-Each link uses two independently bound sockets (one per endpoint) with cross target configuration:
-- VM A: `localaddr=<A_IP>:portA` and `udp=<B_IP>:portB`
-- VM B: `localaddr=<B_IP>:portB` and `udp=<A_IP>:portA`
+```bash
+# VM 100
+qm set 100 --args "-netdev socket,id=net0,udp=127.0.0.1:41021,localaddr=127.0.0.1:41001 -device virtio-net-pci,mac=be:24:99:00:64:01,..."
+```
 
-## MAC Generation
-MAC = `{prefix0}:{prefix1}:{prefix2}:{vmid_hi}:{vmid_lo}:{iface}`
-- Prefix: forced to locally administered & unicast (multicast bit cleared, local bit set)
-- `vmid_hi` / `vmid_lo`: high / low byte of VMID
-- `iface`: eth index you put in the link (not the netIndex)
+## Port Allocation
 
-Example (prefix `3c:ec:ef`, VM 100, eth 1) -> `3e:ec:ef:00:64:01` (first octet adjusted to `3e`).
+Ports are allocated using the formula: `<first_digit_of_base><VMID><eth_index>`
+
+Example with `udp_port_base: 40000`:
+- VM 100, eth1 → port 41001
+- VM 102, eth1 → port 41021
+
+## MAC Address Generation
+
+MAC addresses follow the pattern: `<prefix>:<vmid_hi>:<vmid_lo>:<iface_idx>`
+
+Example with prefix `bc:24:99`:
+- VM 100, eth1 → `be:24:99:00:64:01`
+
+The first byte has the locally administered bit (0x02) set to avoid OUI conflicts.
 
 ## Requirements
-- Proxmox host (script runs on a node with access to `/etc/pve/qemu-server/*`)
-- Python 3.8+ (PyYAML)
 
-Install PyYAML if needed:
-```bash
-pip install pyyaml
-```
-(Or apt: `apt install python3-yaml`)
+- Python 3.6+
+- PyYAML (`pip install pyyaml`)
+- Proxmox VE environment with `qm` command available
 
-## Files
-- `gen_pve_links_args.py` – generator script
-- `mapping.yaml` – configuration
+## Limitations
 
-## `mapping.yaml` Structure (UDP Only)
-```yaml
-defaults:
-  model: virtio-net-pci
-  host_mtu: 65535
-  rx_queue_size: 256
-  tx_queue_size: 256
-  mac_prefix: "3c:ec:ef"
-  udp_port_base: 40000
-  udp_ip_by_vm: {}          # optional: VMID -> IP for multi-host (see Multi-Host)
-  udp_default_ip: 127.0.0.1 # fallback
-
-links:
-  - [100, 1, 102, 1]
-  - [101, 1, 102, 2]
-  # [vmA, ethA, vmB, ethB]
-```
-Notes:
-- `eth` numbers are *logical* identifiers used for MAC derivation only; they do **not** need to match `netIndex`.
-
-## Running
-Generate plan:
-```bash
-python3 gen_pve_links_args.py mapping.yaml > plan.txt
-```
-Inspect `plan.txt`; then apply:
-```bash
-bash plan.txt
-```
-Start (or restart) the VMs afterwards:
-```bash
-qm start 100
-qm start 101
-# etc.
+- VMIDs must be ≤ 999 (3 digits)
+- Ethernet indices must be ≤ 9 (single digit)
+- Generated ports must be ≤ 65535
 ```
 
 ## Sample Output Snippet
 ```
-update VM 100: -args -netdev socket,id=c_100_1_102_1_A,udp=127.0.0.1:40103,localaddr=127.0.0.1:40101 -device virtio-net-pci,mac=3e:ec:ef:00:64:01,rx_queue_size=256,tx_queue_size=256,netdev=c_100_1_102_1_A,id=net1,host_mtu=65535 ...
+qm set 100 --args "-netdev socket,id=c_100_1_102_1_A,udp=127.0.0.1:40103,localaddr=127.0.0.1:40101 -device virtio-net-pci,mac=be:24:99:00:64:01,rx_queue_size=1024,tx_queue_size=256,netdev=c_100_1_102_1_A,id=net1,host_mtu=65535"
 ```
-Meaning: VM 100 gains `net1` (existing net0 kept), binding to port 40101 and sending to the peer's port 40103.
 
 ## Multi-Host Usage
 Set `udp_ip_by_vm` so each VM's traffic targets the correct physical host. Example:
@@ -102,43 +99,17 @@ defaults:
 ```
 All `udp=` and `localaddr=` fields use these IPs. If both endpoints resolve to the *same* non-loopback IP and `loopback_if_same_host: true` (default), the script substitutes `127.0.0.1` on both sides to keep packets local.
 
-MTU Note: When using non-loopback underlay, ensure the physical/underlay path MTU >= the `host_mtu` you request. If unsure, pick a conservative value (e.g. 9000 for jumbo networks, 1500 standard) to avoid fragmentation or silent drops.
+MTU Note: When using non-loopback addresses, ensure the physical network MTU >= the `host_mtu` setting to avoid fragmentation.
 
-## Collision & Range Considerations
-- Port = concat(prefixDigit, VMID, ethIndex). Example collisions: VM 10 eth 11 -> 41011 vs VM 101 eth 1 -> 41011. The script aborts if detected.
-- Keep result <= 65535; with prefix '4' the largest safe pattern is limited. Large VMIDs (>= 1000) quickly exceed range.
-- To widen space, choose a smaller single-digit prefix (e.g. base 20000 -> prefix '2'). Multi-digit prefixes are currently ignored except first digit.
-- Changing eth indices in links changes ports; keep stable indexing for reproducibility.
+## Limitations
+- Only first digit of `udp_port_base` used for port calculation
+- No automatic cleanup of removed links
+- VMIDs limited to 999, eth indices to 9 for current port scheme
 
-## Updating Links
-1. Edit `mapping.yaml`
-2. Re-run the generator to a new plan file
-3. Apply plan (only changed args are updated by `qm set`)
-4. Restart affected VMs if needed
-
-## Removing Generated NICs
-Manually edit `/etc/pve/qemu-server/<vmid>.conf` to remove unwanted `args:` portion or rebuild arguments from scratch. (The script only *adds*.)
-
-## Limitations / Future Ideas
-- Only first digit of `udp_port_base` used (could be extended to configurable string prefix).
-- No automatic pruning of removed links / NICs.
-- No helper to regenerate a full --args clean slate (manual for now).
-- Could add an optional alternate formula (hash-based) to compress larger VMIDs.
-- No automatic cleanup of removed links.
-- Single direction loss is silent; consider using monitoring (e.g., `tcpdump -ni any udp port <port>`).
-
-## Security
-Traffic is unencrypted & unauthenticated. For sensitive environments, tunnel UDP over WireGuard / IPsec between hosts, or use an isolated backend network/VLAN.
-
-## License
-Choose and add a license (e.g., MIT) before publishing.
-
-## Quick TL;DR
+## Usage
 ```bash
-pip install pyyaml
-python3 gen_pve_links_args.py mapping.yaml > plan.txt
-bash plan.txt
+pip install pyyaml (Normaly present with PVE installations)
+python3 gen_pve_links_args.py mapping.yaml > adjust_vm_config.sh
+bash adjust_vm_config.sh
 qm start <vmid>
 ```
-
-Contributions welcome via PRs (validation, collision detection, link removal helper, docs improvements).
