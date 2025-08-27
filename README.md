@@ -1,6 +1,24 @@
 # PVE UDP Network Link Generator
 
-Generates Proxmox VE (PVE) QEMU arguments for creating direct UDP-based network links between VMs.
+The **PVE UDP Network Link Generator** creates **Proxmox VE (PVE) QEMU arguments** for building direct, UDP-based network links between virtual machines.  
+
+Unlike Linux bridges or Open vSwitch, which may suppress or alter certain Layer-2 frames, this method establishes a raw “virtual cable” between VM NICs using QEMU’s UDP socket backend.
+
+---
+
+## Why UDP Links?
+
+Standard virtual networking (Linux bridges, OVS) works well for most workloads but can interfere with or drop less common Layer-2 protocols. In lab or testing environments, it is often necessary to pass these protocols transparently between VMs.
+
+Examples include:
+
+- **Link discovery / negotiation** – LLDP  
+- **Interior routing protocols** – IS-IS (ISO)  
+- **Link encryption / authentication** – MACsec  
+- **Link aggregation** – LACP  
+
+By using UDP sockets as direct pipes between VM interfaces, you can emulate dedicated physical cabling inside Proxmox and accurately test these protocols.
+
 
 ## Overview
 
@@ -111,4 +129,29 @@ pip install pyyaml
 python3 gen_pve_links_args.py mapping.yaml > adjust_vm_config.sh
 bash adjust_vm_config.sh
 qm start <vmid>
+```
+
+## Outputs from a example running VM:
+
+LLDP:
+```bash
+veos-pe01>show lldp neighbors 
+Last table change time   : 0:03:46 ago
+Number of table inserts  : 2
+Number of table deletes  : 0
+Number of table drops    : 0
+Number of table age-outs : 0
+
+Port          Neighbor Device ID       Neighbor Port ID    TTL
+---------- ------------------------ ---------------------- ---
+Et1           veos-c01                  Ethernet1           120
+Et2           veos-c02                  Ethernet1           120
+```
+
+ISIS:
+```bash
+veos-pe01>show isis neighbors 
+ 
+Instance  VRF      System Id        Type Interface          SNPA              State Hold time   Circuit Id          
+core      default  veos-c01          L2   Ethernet1.101      P2P               UP    24          1D                  
 ```
