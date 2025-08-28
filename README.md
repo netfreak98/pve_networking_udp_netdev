@@ -20,7 +20,6 @@ Examples include:
 By using UDP sockets as direct pipes between VM interfaces, you can emulate dedicated physical cabling inside Proxmox and accurately test these protocols.
 Unlike memory- or file-system- sockets it even allows to connect VMs running on different KVM hypervisors like this.
 
-
 ## Overview
 
 This tool automates the creation of point-to-point network connections between Proxmox VMs using UDP sockets. It generates the necessary QEMU command-line arguments to establish these links without requiring traditional bridges or VLANs.
@@ -28,86 +27,88 @@ This tool automates the creation of point-to-point network connections between P
 ## Features
 
 - **Direct VM-to-VM networking** using UDP sockets
-- **Deterministic MAC address generation** based on VMID and interface index
+- **Deterministic MAC address generation** (locally administered, based on VMID + eth index)
+- **Idempotent / Re-run safe**: existing NICs (matched by deterministic MAC) are reused (same netN index & PCI addr)
 - **Multi-host support** with configurable IP mappings
-- **Automatic port allocation** using formula: `<prefix><VMID><ethIndex>`
+- **Automatic port allocation** using formula: `<prefixDigit><VMID><ethIndex>`
 - **Respects existing network configurations** by reading current VM settings
-- **PCI address management** to avoid conflicts and to make sure generated socket-nics are added `after` normal bridge interfaces
+- **PCI address management** (two strategies or auto-assignment)
 
 ## Configuration (mapping.yaml)
 
 ### Defaults Section
 
 - `model`: NIC model (default: `virtio-net-pci`)
-- `host_mtu`: Maximum transmission unit (0 to omit, default: 65535)
+- `host_mtu`: MTU to set on tap back-end (0 omits host_mtu, default: 65535)
 - `rx_queue_size`: Receive queue size (default: 1024)
 - `tx_queue_size`: Transmit queue size (default: 256)
-- `mac_prefix`: 3-byte MAC address prefix (default: `bc:24:99`)
-- `udp_port_base`: Base port for UDP connections (default: 40000)
-- `udp_ip_by_vm`: Optional VMID to host IP mapping for multi-host setups
-- `udp_default_ip`: Fallback IP when VMID not in mapping (default: 127.0.0.1)
-- `loopback_if_same_host`: Use loopback for same-host connections (default: true)
+- `mac_prefix`: 3-byte MAC prefix (default: `bc:24:99`) – first byte is modified: OR 0x02 (locally administered) and clear multicast bit -> `bc` becomes `be`
+- `udp_port_base`: Only the FIRST digit is used as the port prefix (e.g. 40000 -> prefix `4`)
+- `udp_ip_by_vm`: Mapping VMID -> host IP for multi-node
+- `udp_default_ip`: Fallback IP if VMID not in map (default: 127.0.0.1)
+- `loopback_if_same_host`: If both endpoints resolve to same non-loopback IP, replace with 127.0.0.1 (default: true)
+- `auto_pci_addr`: If true, omit bus/addr and let QEMU auto-assign
+- `pci_alloc_strategy`: `lowest_free` (scan from 0x02) or `next_highest` (start just above highest existing virtio-net-pci; falls back to lowest_free if range exhausted)
+- `links`: Array of `[vmA, ethA, vmB, ethB]`
 
-### Links Section
+### Link Example
 
-Define connections as: `[vmA, ethA, vmB, ethB]`
-
-Example:
 ```yaml
 links:
-  - [100, 1, 102, 1]  # Connect VM100 eth1 to VM102 eth1
-  - [101, 1, 102, 2]  # Connect VM101 eth1 to VM102 eth2
+  - [100, 1, 102, 1]
+  - [101, 1, 102, 2]
 ```
 
 ## Usage
 
 ```bash
-./gen_pve_links_args.py mapping.yaml
+python3 gen_pve_links_args.py mapping.yaml > adjust_vm_config.sh
+bash adjust_vm_config.sh
 ```
 
-This generates `qm set` commands that can be executed to apply the network configuration:
+## Output Structure
 
-```bash
-# VM 100
-qm set 100 --args "-netdev socket,id=net0,udp=127.0.0.1:41021,localaddr=127.0.0.1:41001 -device virtio-net-pci,mac=be:24:99:00:64:01,..."
+For each VM a single `qm set <vmid> --args "<pairs>"` line is produced containing alternating:
+
+- `-netdev socket,id=netN,udp=<remoteIP>:<remotePort>,localaddr=<localIP>:<localPort>`
+- `-device virtio-net-pci,mac=...,netdev=netN[,bus=pci.0,addr=0xYY],id=netN,rx_queue_size=...,tx_queue_size=...[,host_mtu=...]`
+
+### Full output example
+
+```
+qm set 100 --args "-netdev socket,id=net2,udp=127.0.0.1:41021,localaddr=127.0.0.1:41002 -device virtio-net-pci,mac=be:24:99:00:64:02,netdev=net2,bus=pci.0,addr=0x14,id=net2,rx_queue_size=1024,tx_queue_size=256,host_mtu=65535 -netdev socket,id=net3,udp=127.0.0.1:41031,localaddr=127.0.0.1:41003 -device virtio-net-pci,mac=be:24:99:00:64:03,netdev=net3,bus=pci.0,addr=0x15,id=net3,rx_queue_size=1024,tx_queue_size=256,host_mtu=65535"
 ```
 
 ## Port Allocation
 
-Ports are allocated using the formula: `<first_digit_of_base><VMID><eth_index>`
+`port = <first_digit_of_udp_port_base><VMID><ethIndex>`
 
-Example with `udp_port_base: 40000`:
-- VM 100, eth1 → port 41001
-- VM 102, eth1 → port 41021
+Constraints enforced: VMID ≤ 999, ethIndex ≤ 9 → max 5-digit port plus leading prefix digit. Port must stay ≤ 65535 (validated).
 
 ## MAC Address Generation
 
-MAC addresses follow the pattern: `<prefix>:<vmid_hi>:<vmid_lo>:<iface_idx>`
+Pattern: `<prefixAdjusted>:<vmid_hi_byte>:<vmid_lo_byte>:<iface_index>`
 
-Example with prefix `bc:24:99`:
-- VM 100, eth1 → `be:24:99:00:64:01`
+Example (prefix bc:24:99 → first byte becomes be):
 
-The first byte has the locally administered bit (0x02) set to avoid OUI conflicts.
+- VM 100 (0x0064), eth1 → `be:24:99:00:64:01`
 
-## Requirements
+## NIC Reuse / Idempotency
 
-- Python 3.6+
-- PyYAML (`pip install pyyaml`)
-- Proxmox VE environment with `qm` command available
+- On each run the script derives deterministic MACs.
+- If a MAC already exists in `qm showcmd` output, its `netN` index and PCI slot are reused; only the `-netdev` and `-device` arguments are regenerated (safe to reapply).
+- New NICs start at `highest_existing_net_index + 1`.
 
-## Limitations
+## PCI Allocation
 
-- VMIDs must be ≤ 999 (3 digits)
-- Ethernet indices must be ≤ 9 (single digit)
-- Generated ports must be ≤ 65535
-
-## Sample Output Snippet
-```
-qm set 100 --args "-netdev socket,id=net1,udp=127.0.0.1:41021,localaddr=127.0.0.1:41001 -device virtio-net-pci,mac=be:24:99:00:64:01,rx_queue_size=1024,tx_queue_size=256,netdev=net1,id=net1,bus=pci.0,addr=0x15,host_mtu=65535 -netdev socket,id=net2,udp=127.0.0.1:41031,localaddr=127.0.0.1:41002 -device virtio-net-pci,mac=be:24:99:00:64:02,rx_queue_size=1024,tx_queue_size=256,netdev=net2,id=net2,bus=pci.0,addr=0x16,host_mtu=65535"
-```
+- Manual mode scans usable slots 0x02–0x1d (0x1e/0x1f reserved / bridges added to exclusion).
+- `next_highest` tries strictly above current highest virtio-net-pci; if none free before 0x1e, falls back to `lowest_free`.
+- Exhaustion error suggests enabling `auto_pci_addr:true` or removing devices.
 
 ## Multi-Host Usage
+
 Set `udp_ip_by_vm` so each VM's traffic targets the correct physical host. Example:
+
 ```yaml
 defaults:
   udp_ip_by_vm:
@@ -115,39 +116,40 @@ defaults:
     102: 10.0.10.12   # node hosting VM 102
   udp_default_ip: 127.0.0.1
 ```
+
 All `udp=` and `localaddr=` fields use these IPs. If both endpoints resolve to the *same* non-loopback IP and `loopback_if_same_host: true` (default), the script substitutes `127.0.0.1` on both sides to keep packets local.
 
 MTU Note: When using non-loopback addresses, ensure the physical network MTU >= the `host_mtu` setting to avoid fragmentation.
 
-## Usage
-```bash
-pip install pyyaml
-python3 gen_pve_links_args.py mapping.yaml > adjust_vm_config.sh
-bash adjust_vm_config.sh
-qm start <vmid>
-```
+## Limitations
 
-## Outputs from a example running VM:
+- Only first digit of `udp_port_base` used.
+- VMID limited to 3 digits; eth index to single digit for current port scheme.
+- Does not remove obsolete NICs; it only appends/reuses.
+- No dynamic MTU negotiation; ensure physical path supports configured MTU.
 
-LLDP:
-```bash
-veos-pe01>show lldp neighbors 
-Last table change time   : 0:03:46 ago
-Number of table inserts  : 2
-Number of table deletes  : 0
-Number of table drops    : 0
-Number of table age-outs : 0
+## Troubleshooting
 
-Port          Neighbor Device ID       Neighbor Port ID    TTL
----------- ------------------------ ---------------------- ---
-Et1           veos-c01                  Ethernet1           120
-Et2           veos-c02                  Ethernet1           120
-```
+- Port collision: adjust VMID/eth index or change `udp_port_base`.
+- No free PCI slot (manual): switch to `auto_pci_addr:true` or free a slot.
+- Want a clean slate: `qm set <vmid> --delete args`
+- Unexpected reuse: change `mac_prefix` (will generate different MACs → new NICs).
 
-ISIS:
-```bash
-veos-pe01>show isis neighbors 
- 
-Instance  VRF      System Id        Type Interface          SNPA              State Hold time   Circuit Id          
-core      default  veos-c01          L2   Ethernet1.101      P2P               UP    24          1D                  
-```
+## Safety Notes
+
+- Review generated `qm set` lines before execution.
+- Repeated application is safe; reused NICs keep PCI and net index.
+
+## Requirements
+
+- Python 3.6+
+- PyYAML (`pip install pyyaml`)
+- Proxmox VE host with `qm` available
+
+## Disclaimer
+
+Tool outputs raw QEMU args; validate in non-production first.
+Then regenerate and re-apply.
+
+## Disclaimer
+Tool appends additional -netdev/-device pairs; review before applying in production.
