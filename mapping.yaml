@@ -1,22 +1,26 @@
 defaults:
   # NIC model & queue sizing
   model: virtio-net-pci
-  host_mtu: 65535           # host_mtu passed to -device (0 to omit)
+  host_mtu: 65535                    # host_mtu passed to -device (0 to omit)
   rx_queue_size: 1024
   tx_queue_size: 256
-  mac_prefix: "bc:24:99"    # PVE defaults to BC:24:11, small room for customization here
+  mac_prefix: "bc:24:99"             # PVE defaults to BC:24:11, small room for customization here
 
   # UDP tunneling parameters
-  udp_port_base: 40000      # first digit used as prefix for port = <firstDigit><VMID><ethIndex>
-  udp_ip_by_vm: {}          # optional mapping VMID -> host/IP (omit or leave empty if single host)
-  udp_default_ip: 127.0.0.1 # fallback IP when VMID not in udp_ip_by_vm
+  udp_port_base: 40000               # first digit used as prefix for port = <firstDigit><VMID><ethIndex>
+  udp_ip_by_vm: {}                   # optional mapping VMID -> host/IP (omit or leave empty if single host)
+  udp_default_ip: 127.0.0.1          # fallback IP when VMID not in udp_ip_by_vm
   loopback_if_same_host: true
 
+  # PCI address assignment
+  auto_pci_addr: false               # set true to omit addr= and let QEMU assign automatically
+  pci_alloc_strategy: next_highest   # new: next_highest | lowest_free
+
 links:
-  - [100, 1, 102, 1] # Note: 1 equals eth1, not eth0. I already have an interface connected using a bridge for management.
-  - [101, 1, 102, 2]
-  - [100, 2, 103, 1]
-  - [101, 2, 103, 2]
+  - [100, 2, 102, 1]
+  - [101, 2, 102, 2]
+  - [100, 3, 103, 1]
+  - [101, 3, 103, 2]
   - [102, 3, 103, 3]
   - [104, 1, 102, 4]
   - [105, 1, 102, 5]
